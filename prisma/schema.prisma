@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
@@ -34,6 +34,23 @@ enum CampaignStatus {
   launching
   sent
   completed
+}
+
+// The marketer who logs in (Google OAuth). Owns the segments + campaigns they create.
+// Customers/orders are NOT owned by a user — they're the brand's shared shopper base.
+model User {
+  id           String   @id @default(uuid())
+  googleId     String?  @unique @map("google_id")   // now optional
+  email        String   @unique
+  passwordHash String?  @map("password_hash")        // null for Google users
+  name         String?
+  avatarUrl    String?  @map("avatar_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  segments  Segment[]
+  campaigns Campaign[]
+
+  @@map("users")
 }
 
 model Customer {
@@ -67,19 +84,25 @@ model Order {
 }
 
 // rules = structured segment tree (from manual builder OR AI). Engine translates to SQL.
+// Owned by the marketer who created it.
 model Segment {
   id        String   @id @default(uuid())
+  userId    String   @map("user_id")
   name      String
   rules     Json
   createdAt DateTime @default(now()) @map("created_at")
 
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   campaigns Campaign[]
 
+  @@index([userId])
   @@map("segments")
 }
 
+// Owned by the marketer who launched it.
 model Campaign {
   id              String         @id @default(uuid())
+  userId          String         @map("user_id")
   name            String
   segmentId       String         @map("segment_id")
   channel         Channel
@@ -87,9 +110,11 @@ model Campaign {
   status          CampaignStatus @default(draft)
   createdAt       DateTime       @default(now()) @map("created_at")
 
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   segment        Segment         @relation(fields: [segmentId], references: [id])
   communications Communication[]
 
+  @@index([userId])
   @@map("campaigns")
 }
 

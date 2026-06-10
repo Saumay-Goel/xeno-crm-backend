@@ -121,15 +121,19 @@ export async function previewSegment(rules: Rule) {
     })),
   };
 }
-
-export async function createSegment(name: string, rules: Rule) {
-  return prisma.segment.create({ data: { name, rules: rules as object } });
+export async function createSegment(userId: string, name: string, rules: Rule) {
+  return prisma.segment.create({
+    data: { userId, name, rules: rules as object },
+  });
 }
 
-export async function listSegments() {
-  return prisma.segment.findMany({ orderBy: { createdAt: "desc" } });
+export async function listSegments(userId: string) {
+  return prisma.segment.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
-export async function getSegment(id: string) {
-  return prisma.segment.findUnique({ where: { id } });
+export async function getSegment(id: string, userId: string) {
+  return prisma.segment.findFirst({ where: { id, userId } });
 }

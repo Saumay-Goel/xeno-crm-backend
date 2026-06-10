@@ -7,6 +7,7 @@ import type { Rule } from "../types/segment.types.js";
 type Channel = "whatsapp" | "sms" | "email" | "rcs";
 
 interface LaunchParams {
+  userId: string;
   name: string;
   segmentId: string;
   channel: Channel;
@@ -14,6 +15,7 @@ interface LaunchParams {
 }
 
 export async function launchCampaign({
+  userId,
   name,
   segmentId,
   channel,
@@ -27,12 +29,17 @@ export async function launchCampaign({
     throw new Error("Segment matches zero customers — nothing to send");
   }
 
-  // Create the campaign in "launching" state.
   const campaign = await prisma.campaign.create({
-    data: { name, segmentId, channel, messageTemplate, status: "launching" },
+    data: {
+      userId,
+      name,
+      segmentId,
+      channel,
+      messageTemplate,
+      status: "launching",
+    },
   });
 
-  // Materialize one communication per matched customer, message pre-rendered.
   const commData = audience.map((c) => ({
     campaignId: campaign.id,
     customerId: c.id,
@@ -46,16 +53,13 @@ export async function launchCampaign({
 
   await prisma.communication.createMany({ data: commData });
 
-  // Fetch them back to get their generated ids (createMany doesn't return rows).
   const comms = await prisma.communication.findMany({
     where: { campaignId: campaign.id },
     select: { id: true, renderedMessage: true, customerId: true },
   });
 
-  // Map customerId → recipient (email/phone) for the channel payload.
   const recipientById = new Map(audience.map((c) => [c.id, c.email]));
 
-  // Enqueue a send job per communication. Bulk-add for efficiency.
   await sendQueue.addBulk(
     comms.map((comm) => ({
       name: "send",
@@ -68,7 +72,6 @@ export async function launchCampaign({
     })),
   );
 
-  // Flip to "sent" — the campaign has been fully dispatched to the queue.
   await prisma.campaign.update({
     where: { id: campaign.id },
     data: { status: "sent" },
@@ -77,8 +80,9 @@ export async function launchCampaign({
   return { campaignId: campaign.id, audienceSize: audience.length };
 }
 
-export async function listCampaigns() {
+export async function listCampaigns(userId: string) {
   return prisma.campaign.findMany({
+    where: { userId },
     orderBy: { createdAt: "desc" },
     include: {
       segment: { select: { name: true } },
@@ -87,9 +91,9 @@ export async function listCampaigns() {
   });
 }
 
-export async function getCampaign(id: string) {
-  return prisma.campaign.findUnique({
-    where: { id },
+export async function getCampaign(id: string, userId: string) {
+  return prisma.campaign.findFirst({
+    where: { id, userId },
     include: { segment: true },
   });
 }

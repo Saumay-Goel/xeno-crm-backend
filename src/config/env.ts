@@ -12,6 +12,11 @@ const schema = z.object({
   CHANNEL_SERVICE_URL: z.string().url(),
   CALLBACK_SECRET: z.string().min(1),
   GEMINI_API_KEY: z.string().min(1),
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GOOGLE_CALLBACK_URL: z.string().url(),
+  JWT_SECRET: z.string().min(16),
+  FRONTEND_URL: z.string().url(),
 });
 
 const parsed = schema.safeParse(process.env);

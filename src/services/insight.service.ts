@@ -1,8 +1,8 @@
 import { prisma } from "../config/db.js";
 
-export async function getCampaignFunnel(campaignId: string) {
-  const campaign = await prisma.campaign.findUnique({
-    where: { id: campaignId },
+export async function getCampaignFunnel(campaignId: string, userId: string) {
+  const campaign = await prisma.campaign.findFirst({
+    where: { id: campaignId, userId },
     include: { segment: { select: { name: true } } },
   });
   if (!campaign) return null;
@@ -46,5 +46,59 @@ export async function getCampaignFunnel(campaignId: string) {
     },
     funnel,
     pending,
+  };
+}
+
+export async function getDashboardStats(userId: string) {
+  const [customerCount, orderAgg, campaignCount, commStats, recentCampaigns] =
+    await Promise.all([
+      prisma.customer.count(),
+      prisma.order.aggregate({ _sum: { amount: true } }),
+      prisma.campaign.count({ where: { userId } }),
+      prisma.communication.findMany({
+        where: { campaign: { userId } },
+        select: {
+          sentAt: true,
+          deliveredAt: true,
+          openedAt: true,
+          convertedAt: true,
+        },
+      }),
+      prisma.campaign.findMany({
+        where: { userId },
+        take: 5,
+        orderBy: { createdAt: "desc" },
+        include: {
+          segment: { select: { name: true } },
+          _count: { select: { communications: true } },
+        },
+      }),
+    ]);
+
+  const sent = commStats.filter((c) => c.sentAt).length;
+  const delivered = commStats.filter((c) => c.deliveredAt).length;
+  const opened = commStats.filter((c) => c.openedAt).length;
+  const converted = commStats.filter((c) => c.convertedAt).length;
+
+  return {
+    customers: customerCount,
+    totalRevenue: Number(orderAgg._sum.amount ?? 0),
+    campaigns: campaignCount,
+    messaging: {
+      sent,
+      delivered,
+      opened,
+      converted,
+      deliveryRate: sent ? Math.round((delivered / sent) * 100) : 0,
+      openRate: delivered ? Math.round((opened / delivered) * 100) : 0,
+    },
+    recentCampaigns: recentCampaigns.map((c) => ({
+      id: c.id,
+      name: c.name,
+      channel: c.channel,
+      segmentName: c.segment.name,
+      audience: c._count.communications,
+      createdAt: c.createdAt,
+    })),
   };
 }

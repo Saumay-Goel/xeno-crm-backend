@@ -8,5 +8,5 @@ router.get(
   "/campaigns/:id/funnel",
   asyncHandler(insightsController.campaignFunnel),
 );
-
+router.get("/dashboard", asyncHandler(insightsController.dashboard));
 export default router;

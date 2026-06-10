@@ -10,3 +10,8 @@ export async function campaignFunnel(req: Request, res: Response) {
   if (!result) return res.status(404).json({ error: "Campaign not found" });
   res.json(result);
 }
+
+export async function dashboard(_req: Request, res: Response) {
+  const stats = await insightsService.getDashboardStats();
+  res.json(stats);
+}
