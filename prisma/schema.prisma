@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// All four channels are *simulated* by the channel service — never a real provider.
+enum Channel {
+  whatsapp
+  sms
+  email
+  rcs
+}
+
+// Lifecycle moves strictly forward; `failed` is a terminal branch off `sent`.
+// The /receipt handler must never regress status (a late "delivered" can't overwrite "read").
+enum CommStatus {
+  queued
+  sent
+  delivered
+  failed
+  opened
+  read
+  clicked
+  converted
+}
+
+enum CampaignStatus {
+  draft
+  launching
+  sent
+  completed
+}
+
+model Customer {
+  id         String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  phone      String?
+  city       String?
+  attributes Json     @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  orders         Order[]
+  communications Communication[]
+
+  @@index([city])
+  @@map("customers")
+}
+
+model Order {
+  id         String   @id @default(uuid())
+  customerId String   @map("customer_id")
+  amount     Decimal  @db.Decimal(10, 2)
+  items      Json     @default("[]")
+  orderedAt  DateTime @map("ordered_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([orderedAt])
+  @@map("orders")
+}
+
+// rules = structured segment tree (from manual builder OR AI). Engine translates to SQL.
+model Segment {
+  id        String   @id @default(uuid())
+  name      String
+  rules     Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  campaigns Campaign[]
+
+  @@map("segments")
+}
+
+model Campaign {
+  id              String         @id @default(uuid())
+  name            String
+  segmentId       String         @map("segment_id")
+  channel         Channel
+  messageTemplate String         @map("message_template")
+  status          CampaignStatus @default(draft)
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  segment        Segment         @relation(fields: [segmentId], references: [id])
+  communications Communication[]
+
+  @@map("campaigns")
+}
+
+// One row per (campaign x customer). Timestamp-per-stage lets us compute the funnel with COUNTs.
+model Communication {
+  id              String     @id @default(uuid())
+  campaignId      String     @map("campaign_id")
+  customerId      String     @map("customer_id")
+  channel         Channel
+  renderedMessage String     @map("rendered_message")
+  status          CommStatus @default(queued)
+  sentAt          DateTime?  @map("sent_at")
+  deliveredAt     DateTime?  @map("delivered_at")
+  failedAt        DateTime?  @map("failed_at")
+  openedAt        DateTime?  @map("opened_at")
+  readAt          DateTime?  @map("read_at")
+  clickedAt       DateTime?  @map("clicked_at")
+  convertedAt     DateTime?  @map("converted_at")
+
+  campaign Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id])
+  receipts Receipt[]
+
+  @@index([campaignId])
+  @@index([status])
+  @@map("communications")
+}
+
+// Append-only callback log → gives idempotency + audit trail for the channel loop.
+model Receipt {
+  id              String   @id @default(uuid())
+  communicationId String   @map("communication_id")
+  eventType       String   @map("event_type")
+  payload         Json     @default("{}")
+  receivedAt      DateTime @default(now()) @map("received_at")
+
+  communication Communication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  @@index([communicationId])
+  @@map("receipts")
+}
