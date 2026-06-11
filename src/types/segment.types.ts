@@ -12,7 +12,7 @@ export type Operator =
   | "gte" // >=
   | "lt" //
   | "lte" // <=
-  | "in"; // value is an array, field must be one of them
+  | "in";
 
 export interface Condition {
   field: SegmentField;

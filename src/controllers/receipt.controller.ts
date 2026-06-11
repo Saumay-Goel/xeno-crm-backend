@@ -17,7 +17,6 @@ const receiptSchema = z.object({
 });
 
 export async function ingest(req: Request, res: Response) {
-  // Verify the callback actually came from our channel service.
   if (req.header("x-callback-secret") !== env.CALLBACK_SECRET) {
     return res.status(401).json({ error: "Invalid callback secret" });
   }

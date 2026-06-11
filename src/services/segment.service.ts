@@ -2,7 +2,6 @@ import { prisma } from "../config/db.js";
 import type { Rule, Condition, Group } from "../types/segment.types.js";
 import { isGroup } from "../types/segment.types.js";
 
-// A flattened view of a customer with the derived metrics segments care about.
 interface CustomerMetrics {
   id: string;
   name: string;
@@ -11,14 +10,9 @@ interface CustomerMetrics {
   signupSource: string | null;
   totalSpend: number;
   orderCount: number;
-  daysSinceLastOrder: number | null; // null = never ordered
+  daysSinceLastOrder: number | null;
 }
 
-/**
- * Load every customer with their derived metrics. For this assignment's scale
- * (~500 customers) computing in-app is simple and fast. At real scale this would
- * become a SQL query with aggregates / a materialized view — see note in README.
- */
 async function loadCustomerMetrics(): Promise<CustomerMetrics[]> {
   const customers = await prisma.customer.findMany({
     include: { orders: { select: { amount: true, orderedAt: true } } },
@@ -68,7 +62,7 @@ function getFieldValue(
 
 function evalCondition(m: CustomerMetrics, cond: Condition): boolean {
   const actual = getFieldValue(m, cond.field);
-  if (actual === null) return false; // null never matches a comparison (e.g. never-ordered)
+  if (actual === null) return false;
 
   const { op, value } = cond;
   switch (op) {
@@ -99,13 +93,11 @@ function evalRule(m: CustomerMetrics, rule: Rule): boolean {
   return evalCondition(m, rule as Condition);
 }
 
-/** Returns the customers matching a rule tree. */
 export async function evaluateSegment(rules: Rule): Promise<CustomerMetrics[]> {
   const all = await loadCustomerMetrics();
   return all.filter((m) => evalRule(m, rules));
 }
 
-/** Just the count + a small preview — what the "preview" endpoint returns. */
 export async function previewSegment(rules: Rule) {
   const matches = await evaluateSegment(rules);
   return {

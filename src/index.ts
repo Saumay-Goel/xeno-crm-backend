@@ -25,14 +25,13 @@ app.get("/health", (_req, res) => {
 });
 
 router.use("/auth", authRoutes);
-router.use("/customers", customerRoutes);
-router.use("/orders", orderRoutes);
-router.use("/segments", segmentRoutes);
 router.use("/receipts", receiptRoutes);
-router.use("/campaigns", campaignRoutes);
-router.use("/insights", insightsRoutes);
-router.use("/ai", aiRoutes);
-router.use("/auth", authRoutes);
+router.use("/customers", requireAuth, customerRoutes);
+router.use("/orders", requireAuth, orderRoutes);
+router.use("/segments", requireAuth, segmentRoutes);
+router.use("/campaigns", requireAuth, campaignRoutes);
+router.use("/insights", requireAuth, insightsRoutes);
+router.use("/ai", requireAuth, aiRoutes);
 app.use("/api", router);
 
 app.use(errorMiddleware);

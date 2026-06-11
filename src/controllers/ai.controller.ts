@@ -14,9 +14,6 @@ const proposeSchema = z.object({
     .min(1),
 });
 
-// POST /api/ai/propose
-// body: { messages: [{role, content}, ...] }
-// → { kind: "proposal", proposal, audience } OR { kind: "clarification", question, options }
 export async function propose(req: Request, res: Response) {
   const { messages } = proposeSchema.parse(req.body);
 

@@ -5,9 +5,7 @@ import { z } from "zod";
 import type { Rule } from "../types/segment.types.js";
 
 const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-// --- The two possible shapes Gemini can return ---
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const proposalSchema = z.object({
   kind: z.literal("proposal"),
@@ -34,7 +32,6 @@ export type CampaignProposal = z.infer<typeof proposalSchema> & { rules: Rule };
 export type Clarification = z.infer<typeof clarificationSchema>;
 export type AiResponse = CampaignProposal | Clarification;
 
-// The conversation history the controller passes in.
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -98,11 +95,6 @@ function extractJson(text: string): string {
     .trim();
 }
 
-/**
- * Build Gemini's `contents` array from our conversation.
- * Gemini uses roles "user" and "model" (not "assistant"), so we map.
- * The system prompt is seeded as the first turn + a model ack, then the real history follows.
- */
 function buildContents(messages: ChatMessage[], correction?: string) {
   const contents: Array<{
     role: "user" | "model";
@@ -147,10 +139,6 @@ async function callGemini(
   return result.response.text();
 }
 
-/**
- * Given the full conversation, return EITHER a validated CampaignProposal
- * OR a Clarification. Retries once if the first response fails validation.
- */
 export async function generateProposal(
   messages: ChatMessage[],
 ): Promise<AiResponse> {

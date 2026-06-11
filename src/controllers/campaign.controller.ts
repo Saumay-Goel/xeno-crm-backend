@@ -32,7 +32,6 @@ export async function launch(req: Request, res: Response) {
   const body = launchSchema.parse(req.body);
 
   let segmentId = body.segmentId;
-  // If inline rules were given, persist them as a segment first.
   if (!segmentId && body.inlineSegment) {
     const seg = await segmentService.createSegment(
       userId,
@@ -49,7 +48,6 @@ export async function launch(req: Request, res: Response) {
     channel: body.channel,
     messageTemplate: body.messageTemplate,
   });
-
   res.status(201).json(result);
 }
 
