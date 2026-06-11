@@ -19,7 +19,15 @@
   "pnpm": {
     "overrides": {
       "ioredis": "5.10.1"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "msgpackr-extract",
+      "bcrypt"
+    ]
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
