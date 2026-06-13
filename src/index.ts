@@ -16,7 +16,12 @@ import { requireAuth } from "./middleware/auth.middleware.js";
 import "./queue/send.worker.js";
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: env.CORS_ORIGIN,
+    credentials: true,
+  }),
+);
 app.use(express.json());
 const router = Router();
 
