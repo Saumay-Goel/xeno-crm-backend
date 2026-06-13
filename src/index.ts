@@ -24,6 +24,10 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "crm", ts: new Date().toISOString() });
 });
 
+app.get("/", (_req, res) => {
+  res.json({ ok: true, service: "working!", ts: new Date().toISOString() });
+});
+
 router.use("/auth", authRoutes);
 router.use("/receipts", receiptRoutes);
 router.use("/customers", requireAuth, customerRoutes);
