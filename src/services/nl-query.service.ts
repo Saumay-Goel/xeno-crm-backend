@@ -8,39 +8,48 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const SCHEMA_PROMPT = `You are a PostgreSQL expert for a marketing CRM. Translate the user's question into ONE read-only SQL SELECT query.
 
-DATABASE SCHEMA (PostgreSQL):
+CRITICAL QUOTING RULE:
+This database uses camelCase column names created by Prisma. In PostgreSQL, camelCase identifiers MUST be wrapped in double quotes or they will fail. ALWAYS double-quote these exact columns everywhere they appear (in SELECT, WHERE, JOIN, GROUP BY):
+  "customerId", "orderedAt", "createdAt"
+Lowercase columns (id, name, email, phone, city, amount, attributes) do NOT need quotes.
 
-Table "customers":
+DATABASE SCHEMA:
+
+Table customers:
   id            text (uuid, primary key)
   name          text
   email         text
   phone         text (nullable)
-  city          text (nullable)  -- values: Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad
+  city          text (nullable)  -- Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad
   attributes    jsonb (nullable) -- may contain "signupSource": organic | ads | referral
   "createdAt"   timestamp
 
-Table "orders":
+Table orders:
   id            text (uuid, primary key)
   "customerId"  text  -- FK -> customers.id
   amount        numeric
   "orderedAt"   timestamp
 
-RELATIONSHIPS:
-- A customer has many orders (orders."customerId" = customers.id).
+JOIN EXAMPLE (copy this quoting style exactly):
+  SELECT c.id, c.name, c.email, c.city, SUM(o.amount) AS "totalSpend"
+  FROM customers c
+  JOIN orders o ON o."customerId" = c.id
+  WHERE c.city ILIKE 'Mumbai'
+  GROUP BY c.id, c.name, c.email, c.city
+  HAVING SUM(o.amount) > 5000
 
-DERIVED METRICS you may need (compute with joins/aggregates):
-- total spend      = SUM(orders.amount) per customer
-- order count      = COUNT(orders.id) per customer
-- days since last order = EXTRACT(DAY FROM now() - MAX(orders."orderedAt"))
+DERIVED METRICS:
+- total spend = SUM(o.amount)
+- order count = COUNT(o.id)
+- days since last order = EXTRACT(DAY FROM now() - MAX(o."orderedAt"))
 
 RULES:
-- Return ONLY the raw SQL. No markdown, no backticks, no explanation.
-- SELECT only. Never write, modify, or use DDL.
-- Column names "customerId", "orderedAt", "createdAt" are camelCase — you MUST double-quote them.
-- Always include the customer's id, name, email, city in the SELECT when returning customers, plus any metric the question asks about, aliased clearly (e.g. AS "totalSpend", AS "orderCount").
-- Use ILIKE for case-insensitive text matching (names, cities).
-- If the question is about customers, return customer rows. If it's a count/aggregate, return that.
-- Limit results sensibly; do not return more than 100 rows.`;
+- Return ONLY raw SQL. No markdown, no backticks, no explanation.
+- SELECT only. Never write or use DDL.
+- ALWAYS double-quote "customerId", "orderedAt", "createdAt".
+- When returning customers, SELECT at least id, name, email, city, plus any metric asked for, aliased (e.g. AS "totalSpend").
+- Use ILIKE for text matching.
+- Never return more than 100 rows.`;
 
 function extractSql(text: string): string {
   return text
