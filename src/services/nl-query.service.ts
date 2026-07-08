@@ -69,7 +69,7 @@ export async function runNlQuery(question: string): Promise<NlQueryResult> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const correction =
       attempt === 2 && lastError instanceof Error
-        ? `\n\nYour previous SQL failed with: "${lastError.message}". This is likely a missing double-quote on a camelCase column like "customerId" or "orderedAt". Fix the quoting and return ONLY corrected SQL.`
+        ? `\n\nYour previous SQL failed with: "${lastError.message}". Use the exact lowercase snake_case column names from the schema (e.g. customer_id, ordered_at, created_at) with NO double quotes. Return ONLY corrected SQL.`
         : "";
 
     const result = await model.generateContent({
@@ -87,6 +87,7 @@ export async function runNlQuery(question: string): Promise<NlQueryResult> {
     });
 
     const rawSql = extractSql(result.response.text());
+    console.log("[nl-query] generated SQL:", rawSql);
 
     try {
       const safe = assertSafeSelect(rawSql);
