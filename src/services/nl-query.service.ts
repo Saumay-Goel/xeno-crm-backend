@@ -8,47 +8,46 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const SCHEMA_PROMPT = `You are a PostgreSQL expert for a marketing CRM. Translate the user's question into ONE read-only SQL SELECT query.
 
-CRITICAL QUOTING RULE:
-This database uses camelCase column names created by Prisma. In PostgreSQL, camelCase identifiers MUST be wrapped in double quotes or they will fail. ALWAYS double-quote these exact columns everywhere they appear (in SELECT, WHERE, JOIN, GROUP BY):
-  "customerId", "orderedAt", "createdAt"
-Lowercase columns (id, name, email, phone, city, amount, attributes) do NOT need quotes.
+All table and column names are lowercase snake_case. Use them exactly as written below. Do NOT use double quotes around identifiers.
 
 DATABASE SCHEMA:
 
 Table customers:
-  id            text (uuid, primary key)
-  name          text
-  email         text
-  phone         text (nullable)
-  city          text (nullable)  -- Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad
-  attributes    jsonb (nullable) -- may contain "signupSource": organic | ads | referral
-  "createdAt"   timestamp
+  id          text (uuid, primary key)
+  name        text
+  email       text
+  phone       text (nullable)
+  city        text (nullable)  -- values: Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad
+  attributes  jsonb            -- may contain {"signupSource": "organic" | "ads" | "referral"}
+  created_at  timestamp
 
 Table orders:
-  id            text (uuid, primary key)
-  "customerId"  text  -- FK -> customers.id
-  amount        numeric
-  "orderedAt"   timestamp
+  id           text (uuid, primary key)
+  customer_id  text  -- FK -> customers.id
+  amount       numeric
+  ordered_at   timestamp
 
-JOIN EXAMPLE (copy this quoting style exactly):
-  SELECT c.id, c.name, c.email, c.city, SUM(o.amount) AS "totalSpend"
+JOIN EXAMPLE (follow this exact style):
+  SELECT c.id, c.name, c.email, c.city, SUM(o.amount) AS total_spend
   FROM customers c
-  JOIN orders o ON o."customerId" = c.id
+  JOIN orders o ON o.customer_id = c.id
   WHERE c.city ILIKE 'Mumbai'
   GROUP BY c.id, c.name, c.email, c.city
   HAVING SUM(o.amount) > 5000
 
 DERIVED METRICS:
-- total spend = SUM(o.amount)
-- order count = COUNT(o.id)
-- days since last order = EXTRACT(DAY FROM now() - MAX(o."orderedAt"))
+- total spend           = SUM(o.amount)
+- order count           = COUNT(o.id)
+- days since last order = EXTRACT(DAY FROM now() - MAX(o.ordered_at))
+
+To read signup source from the jsonb column: attributes->>'signupSource'
 
 RULES:
 - Return ONLY raw SQL. No markdown, no backticks, no explanation.
 - SELECT only. Never write or use DDL.
-- ALWAYS double-quote "customerId", "orderedAt", "createdAt".
-- When returning customers, SELECT at least id, name, email, city, plus any metric asked for, aliased (e.g. AS "totalSpend").
-- Use ILIKE for text matching.
+- All identifiers are lowercase snake_case — never use double quotes.
+- When returning customers, SELECT at least id, name, email, city, plus any metric asked for, aliased in snake_case (e.g. AS total_spend).
+- Use ILIKE for case-insensitive text matching.
 - Never return more than 100 rows.`;
 
 function extractSql(text: string): string {
