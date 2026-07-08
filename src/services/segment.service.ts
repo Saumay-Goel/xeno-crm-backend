@@ -98,11 +98,11 @@ export async function evaluateSegment(rules: Rule): Promise<CustomerMetrics[]> {
   return all.filter((m) => evalRule(m, rules));
 }
 
-export async function previewSegment(rules: Rule) {
+export async function previewSegment(rules: Rule, limit = 10) {
   const matches = await evaluateSegment(rules);
   return {
     count: matches.length,
-    preview: matches.slice(0, 10).map((m) => ({
+    preview: matches.slice(0, limit).map((m) => ({
       id: m.id,
       name: m.name,
       email: m.email,
@@ -113,6 +113,7 @@ export async function previewSegment(rules: Rule) {
     })),
   };
 }
+
 export async function createSegment(userId: string, name: string, rules: Rule) {
   return prisma.segment.create({
     data: { userId, name, rules: rules as object },

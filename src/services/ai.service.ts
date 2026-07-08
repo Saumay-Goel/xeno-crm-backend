@@ -23,27 +23,35 @@ const clarificationSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
+const querySchema = z.object({
+  kind: z.literal("query"),
+  intent: z.string().min(1),
+  rules: ruleSchema,
+});
+
 const responseSchema = z.discriminatedUnion("kind", [
   proposalSchema,
   clarificationSchema,
+  querySchema,
 ]);
 
+export type CustomerQuery = z.infer<typeof querySchema> & { rules: Rule };
 export type CampaignProposal = z.infer<typeof proposalSchema> & { rules: Rule };
 export type Clarification = z.infer<typeof clarificationSchema>;
-export type AiResponse = CampaignProposal | Clarification;
+export type AiResponse = CampaignProposal | Clarification | CustomerQuery;
 
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are a marketing campaign assistant for a CRM. The marketer describes who they want to reach and what to say, in plain English, possibly across several turns of conversation. You translate that into a structured campaign proposal — OR, if the request is ambiguous or relies on data you don't have, you ask a clarifying question instead of guessing.
+const SYSTEM_PROMPT = `You are a marketing campaign assistant for a CRM. The marketer describes who they want to reach and what to say, in plain English, possibly across several turns of conversation. You translate that into a structured campaign proposal — OR, if they just want to explore the customer base, you return a query — OR, if the request is ambiguous or relies on data you don't have, you ask a clarifying question instead of guessing.
 
 This is a CONVERSATION. Use the full history: if you previously asked a clarifying question and the marketer just answered it, combine their answer with the earlier intent. If they ask to adjust an earlier proposal (change the discount, the channel, the audience), produce an updated proposal reflecting the change.
 
-You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary). It must be ONE of these two shapes:
+You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary). It must be ONE of these three shapes:
 
-PROPOSAL (use when you can confidently proceed):
+PROPOSAL (use when the marketer wants to REACH or MESSAGE customers — launch a campaign):
 {
   "kind": "proposal",
   "segmentName": string,
@@ -52,6 +60,13 @@ PROPOSAL (use when you can confidently proceed):
   "channel": "whatsapp" | "sms" | "email" | "rcs",
   "reasoning": string,
   "assumptions": string[]       // ANY interpretation you had to make. Empty array if none.
+}
+
+QUERY (use when the marketer wants to SEE, LIST, or COUNT customers — not send a campaign. Signals: "show", "list", "who", "how many", "find", "which customers"):
+{
+  "kind": "query",
+  "intent": string,             // short restatement, e.g. "Customers in Mumbai who spent over ₹5000"
+  "rules": Rule
 }
 
 CLARIFICATION (use when genuinely ambiguous, multiple reasonable readings, or needs data you don't have):
@@ -75,9 +90,11 @@ Field is one of (THESE ARE THE ONLY DATA YOU HAVE):
 Operator is one of: "eq", "neq", "gt", "gte", "lt", "lte", "in".
 Use "in" with an array value when matching multiple options.
 
-RULES FOR HANDLING AMBIGUITY:
-- If you can proceed but had to choose a threshold or interpret a fuzzy term ("best", "recently"), PROCEED but record every choice in "assumptions" so the marketer can adjust it.
-- If the request has genuinely different reasonable readings, return a CLARIFICATION with options rather than silently picking one. But once the marketer has answered a clarification, do NOT ask again — proceed with a proposal.
+RULES FOR CHOOSING A SHAPE:
+- If the marketer wants to VIEW, LIST, COUNT, or EXPLORE customers (not launch a campaign), return a QUERY with the matching rules — do NOT invent a message or channel.
+- If they want to REACH or MESSAGE customers, return a PROPOSAL. If it's genuinely ambiguous which of the two they want, prefer QUERY (viewing is safer than proposing a send).
+- If you can proceed but had to choose a threshold or interpret a fuzzy term ("best", "recently"), PROCEED but record every choice in "assumptions" (for a proposal) so the marketer can adjust it.
+- If the request has genuinely different reasonable readings, return a CLARIFICATION with options rather than silently picking one. But once the marketer has answered a clarification, do NOT ask again — proceed.
 - If the request needs data you do NOT have (social media, reviews, support tickets, age), return a CLARIFICATION explaining you can only segment on purchase behaviour, spend, recency, city, and signup source — and suggest a related angle you CAN do.
 
 Mapping guidance:
@@ -105,7 +122,7 @@ function buildContents(messages: ChatMessage[], correction?: string) {
       role: "model",
       parts: [
         {
-          text: "Understood. I will respond with only the JSON object, in one of the two allowed shapes, using the full conversation context.",
+          text: "Understood. I will respond with only the JSON object, in one of the three allowed shapes, using the full conversation context.",
         },
       ],
     },
@@ -148,16 +165,15 @@ export async function generateProposal(
     const raw = await callGemini(
       messages,
       attempt === 2
-        ? "(Your previous response was invalid JSON or didn't match either allowed shape. Respond with ONLY the valid JSON object.)"
+        ? "(Your previous response was invalid JSON or didn't match any allowed shape. Respond with ONLY the valid JSON object.)"
         : undefined,
     );
 
     try {
       const parsed = JSON.parse(extractJson(raw));
       const validated = responseSchema.parse(parsed);
-      return validated.kind === "proposal"
-        ? (validated as CampaignProposal)
-        : (validated as Clarification);
+
+      return validated as AiResponse;
     } catch (err) {
       lastError = err;
       console.warn(

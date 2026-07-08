@@ -27,6 +27,15 @@ export async function propose(req: Request, res: Response) {
     });
   }
 
+  if (result.kind === "query") {
+    const audience = await previewSegment(result.rules, 50);
+    return res.json({
+      kind: "query",
+      intent: result.intent,
+      audience,
+    });
+  }
+
   const audience = await previewSegment(result.rules);
   res.json({ kind: "proposal", proposal: result, audience });
 }
