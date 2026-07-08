@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { generateProposal } from "../services/ai.service.js";
 import { previewSegment } from "../services/segment.service.js";
+import { runNlQuery } from "../services/nl-query.service.js";
 
 const proposeSchema = z.object({
   messages: z
@@ -17,7 +18,17 @@ const proposeSchema = z.object({
 export async function propose(req: Request, res: Response) {
   const { messages } = proposeSchema.parse(req.body);
 
-  const result = await generateProposal(messages);
+  let result;
+  try {
+    result = await generateProposal(messages);
+  } catch {
+    return res.json({
+      kind: "clarification",
+      question:
+        'I couldn\'t interpret that. Try asking to see customers (e.g. "show me customers in Mumbai over ₹5000") or to build a campaign.',
+      options: [],
+    });
+  }
 
   if (result.kind === "clarification") {
     return res.json({
@@ -28,14 +39,31 @@ export async function propose(req: Request, res: Response) {
   }
 
   if (result.kind === "query") {
-    const audience = await previewSegment(result.rules, 50);
-    return res.json({
-      kind: "query",
-      intent: result.intent,
-      audience,
-    });
+    // AI-SQL path: use the natural-language question, not the rule tree.
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((m) => m.role === "user");
+    try {
+      const nl = await runNlQuery(lastUserMessage?.content ?? result.intent);
+      return res.json({
+        kind: "query",
+        intent: result.intent,
+        rows: nl.rows,
+        rowCount: nl.rowCount,
+      });
+    } catch (err) {
+      return res.json({
+        kind: "clarification",
+        question:
+          err instanceof Error
+            ? `I couldn't run that query: ${err.message}`
+            : "I couldn't run that query.",
+        options: [],
+      });
+    }
   }
 
+  // proposal
   const audience = await previewSegment(result.rules);
   res.json({ kind: "proposal", proposal: result, audience });
 }

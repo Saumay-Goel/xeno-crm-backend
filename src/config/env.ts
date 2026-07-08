@@ -4,6 +4,7 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url(),
   PORT: z.coerce.number().default(4000),
+  READONLY_DATABASE_URL: z.string().url(),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),
