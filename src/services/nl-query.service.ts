@@ -70,7 +70,7 @@ export async function runNlQuery(question: string): Promise<NlQueryResult> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const correction =
       attempt === 2 && lastError instanceof Error
-        ? `\n\nYour previous SQL failed with: "${lastError.message}". Fix it and return ONLY corrected SQL.`
+        ? `\n\nYour previous SQL failed with: "${lastError.message}". This is likely a missing double-quote on a camelCase column like "customerId" or "orderedAt". Fix the quoting and return ONLY corrected SQL.`
         : "";
 
     const result = await model.generateContent({
