@@ -97,23 +97,21 @@ Derived metrics: total spend = SUM(o.amount); order count = COUNT(o.id); days si
 Signup source: attributes->>'signupSource'. Use ILIKE for text matching. Max 100 rows.
 
 ============ CONVERSATION RULES ============
-- You NEVER see the actual rows of previous results — only the conversation. When the marketer refers to "your list", "these", "those", "the table", they mean the customers matched by the MOST RECENT query. 
-- For a QUERY follow-up: Answer by writing a NEW sql that RE-APPLIES those same filters plus the new condition. 
-- For a PROPOSAL follow-up: Combine the previous query's logical filters with the new request using an "and" combinator inside your Rule group.
+- You NEVER see the actual rows of previous results — only the conversation. When the marketer refers to "your list", "these", "those", "the table", they mean the customers matched by the MOST RECENT query. Answer by writing a NEW sql that RE-APPLIES those same filters plus the new condition. Example: after "customers in Mumbai over 5000", the question "is there a name called Jazmin in your list" becomes sql filtering city ILIKE 'Mumbai', HAVING SUM > 5000, AND name ILIKE '%jazmin%'.
 - Questions ABOUT data — "is there…", "how many…", "which of these…", "who is the top…", "does the list have…" — are ALWAYS a QUERY, never a conversational answer.
 - For "total"/"sum"/"average"/"count" follow-ups, return the aggregate, not the full list.
-- PROPOSAL rules may use any of the defined Fields below. If a campaign needs data outside these fields, return a CLARIFICATION.
+- QUERY sql can use ANY column (name, email, phone, …). PROPOSAL rules may ONLY use: total_spend, order_count, days_since_last_order, city, signup_source. If a campaign needs other data, return a CLARIFICATION.
 - If a proposal needed threshold choices ("best", "recently"), proceed and record them in "assumptions". If genuinely ambiguous between readings, CLARIFICATION with options — but never re-ask after they've answered.
 
 Mapping guidance (proposals): "dormant" → days_since_last_order gt 60; "high spenders"/"VIP" → total_spend gt 5000; "loyal" → order_count gte 5; "new" → order_count lte 1. WhatsApp for rich re-engagement, SMS for urgent/short, email for detailed offers. Messages: natural, clear CTA, a personalization token.
 
 A Rule is either:
-Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in"|"contains", "value": string | number | array }
+Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in", "value": string | number | array }
 Group: { "combinator": "and" | "or", "rules": Rule[] }
 
 Field is one of:
-- "total_spend", "order_count", "days_since_last_order", "city", "signup_source", "name", "email"
-(Note: use op "contains" for partial, case-insensitive matching — e.g. target a specific customer: { "field": "name", "op": "contains", "value": "jazmin" })`;
+- "total_spend", "order_count", "days_since_last_order", "city", "signup_source"
+- "name", "email"  (use op "contains" for partial, case-insensitive matching — e.g. target a specific customer: { "field": "name", "op": "contains", "value": "jazmin" })`;
 
 function extractJson(text: string): string {
   return text
