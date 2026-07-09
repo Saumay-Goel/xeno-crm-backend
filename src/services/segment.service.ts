@@ -57,6 +57,10 @@ function getFieldValue(
       return m.city;
     case "signup_source":
       return m.signupSource;
+    case "name":
+      return m.name;
+    case "email":
+      return m.email;
   }
 }
 
@@ -80,6 +84,12 @@ function evalCondition(m: CustomerMetrics, cond: Condition): boolean {
       return Number(actual) <= Number(value);
     case "in":
       return Array.isArray(value) && value.includes(actual as string | number);
+    case "contains":
+      return (
+        typeof actual === "string" &&
+        typeof value === "string" &&
+        actual.toLowerCase().includes(value.toLowerCase())
+      );
   }
 }
 

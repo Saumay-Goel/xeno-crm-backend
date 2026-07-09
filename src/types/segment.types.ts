@@ -3,16 +3,19 @@ export type SegmentField =
   | "order_count"
   | "days_since_last_order"
   | "city"
-  | "signup_source";
+  | "signup_source"
+  | "name"
+  | "email";
 
 export type Operator =
-  | "eq" // =
-  | "neq" // !=
-  | "gt" // >
-  | "gte" // >=
-  | "lt" //
-  | "lte" // <=
-  | "in";
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "contains";
 
 export interface Condition {
   field: SegmentField;
