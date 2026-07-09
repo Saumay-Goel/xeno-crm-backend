@@ -2,11 +2,12 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../config/env.js";
 import { readonlyPool } from "../config/readonly-db.js";
 import { assertSafeSelect, enforceLimit } from "./sql-guard.service.js";
+import type { ChatMessage } from "./ai.service.js";
 
 const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-const SCHEMA_PROMPT = `You are a PostgreSQL expert for a marketing CRM. Translate the user's question into ONE read-only SQL SELECT query.
+const SCHEMA_PROMPT = `You are a PostgreSQL expert for a marketing CRM. Translate the conversation into ONE read-only SQL SELECT query that answers the user's LATEST request.
 
 All table and column names are lowercase snake_case. Use them exactly as written below. Do NOT use double quotes around identifiers.
 
@@ -47,7 +48,9 @@ RULES:
 - SELECT only. Never write or use DDL.
 - All identifiers are lowercase snake_case — never use double quotes.
 - When returning customers, SELECT at least id, name, email, city, plus any metric asked for, aliased in snake_case (e.g. AS total_spend).
-- Use ILIKE for case-insensitive text matching.
+- Use ILIKE for case-insensitive text matching (names, cities, emails).
+- This is a CONVERSATION. If the user refers to "these", "those", "this list", or "the table", they mean the customers from the most recent query — RE-APPLY the SAME filters from that earlier question in your new query.
+- For "total"/"sum"/"average"/"how many" follow-ups, return the aggregate (e.g. SELECT SUM(...) AS total_spend), not the full customer list.
 - Never return more than 100 rows.`;
 
 function extractSql(text: string): string {
@@ -57,36 +60,85 @@ function extractSql(text: string): string {
     .trim();
 }
 
+function isOverloaded(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("503") ||
+    msg.includes("overloaded") ||
+    msg.includes("high demand") ||
+    msg.includes("Service Unavailable")
+  );
+}
+
+function buildContents(messages: ChatMessage[], correction?: string) {
+  const contents: Array<{
+    role: "user" | "model";
+    parts: Array<{ text: string }>;
+  }> = [
+    { role: "user", parts: [{ text: SCHEMA_PROMPT }] },
+    {
+      role: "model",
+      parts: [
+        { text: "Understood. I will return only a single SELECT query." },
+      ],
+    },
+  ];
+
+  for (const m of messages) {
+    contents.push({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    });
+  }
+
+  if (correction) {
+    contents.push({ role: "user", parts: [{ text: correction }] });
+  }
+
+  return contents;
+}
+
+async function callGemini(
+  messages: ChatMessage[],
+  correction?: string,
+): Promise<string> {
+  for (let i = 0; i <= 2; i++) {
+    try {
+      const result = await model.generateContent({
+        contents: buildContents(messages, correction),
+        generationConfig: { temperature: 0.1 },
+      });
+      return result.response.text();
+    } catch (err) {
+      if (isOverloaded(err) && i < 2) {
+        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Gemini unavailable");
+}
+
 export interface NlQueryResult {
   sql: string;
   rows: Record<string, unknown>[];
   rowCount: number;
 }
 
-export async function runNlQuery(question: string): Promise<NlQueryResult> {
+export async function runNlQuery(
+  messages: ChatMessage[],
+): Promise<NlQueryResult> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const correction =
       attempt === 2 && lastError instanceof Error
-        ? `\n\nYour previous SQL failed with: "${lastError.message}". Use the exact lowercase snake_case column names from the schema (e.g. customer_id, ordered_at, created_at) with NO double quotes. Return ONLY corrected SQL.`
-        : "";
+        ? `Your previous SQL failed with: "${lastError.message}". Use the exact lowercase snake_case column names from the schema (e.g. customer_id, ordered_at, created_at) with NO double quotes. Return ONLY corrected SQL.`
+        : undefined;
 
-    const result = await model.generateContent({
-      contents: [
-        { role: "user", parts: [{ text: SCHEMA_PROMPT }] },
-        {
-          role: "model",
-          parts: [
-            { text: "Understood. I will return only a single SELECT query." },
-          ],
-        },
-        { role: "user", parts: [{ text: question + correction }] },
-      ],
-      generationConfig: { temperature: 0.1 },
-    });
-
-    const rawSql = extractSql(result.response.text());
+    const raw = await callGemini(messages, correction);
+    const rawSql = extractSql(raw);
     console.log("[nl-query] generated SQL:", rawSql);
 
     try {

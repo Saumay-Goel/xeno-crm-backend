@@ -23,10 +23,12 @@ const clarificationSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
+// NOTE: query no longer carries rules — the AI-SQL layer builds the actual
+// query from natural language, so queries can search ANY field (name, email, …),
+// not just the 5 segment fields.
 const querySchema = z.object({
   kind: z.literal("query"),
   intent: z.string().min(1),
-  rules: ruleSchema,
 });
 
 const responseSchema = z.discriminatedUnion("kind", [
@@ -35,7 +37,7 @@ const responseSchema = z.discriminatedUnion("kind", [
   querySchema,
 ]);
 
-export type CustomerQuery = z.infer<typeof querySchema> & { rules: Rule };
+export type CustomerQuery = z.infer<typeof querySchema>;
 export type CampaignProposal = z.infer<typeof proposalSchema> & { rules: Rule };
 export type Clarification = z.infer<typeof clarificationSchema>;
 export type AiResponse = CampaignProposal | Clarification | CustomerQuery;
@@ -45,7 +47,7 @@ export interface ChatMessage {
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are a marketing campaign assistant for a CRM. The marketer describes who they want to reach and what to say, in plain English, possibly across several turns of conversation. You translate that into a structured campaign proposal — OR, if they just want to explore the customer base, you return a query — OR, if the request is ambiguous or relies on data you don't have, you ask a clarifying question instead of guessing.
+const SYSTEM_PROMPT = `You are a marketing campaign assistant for a CRM. The marketer describes who they want to reach and what to say, in plain English, possibly across several turns of conversation. You translate that into a structured campaign proposal — OR, if they just want to explore or look up customers, you return a query — OR, if the request is ambiguous or relies on data you don't have, you ask a clarifying question instead of guessing.
 
 This is a CONVERSATION. Use the full history: if you previously asked a clarifying question and the marketer just answered it, combine their answer with the earlier intent. If they ask to adjust an earlier proposal (change the discount, the channel, the audience), produce an updated proposal reflecting the change.
 
@@ -62,11 +64,10 @@ PROPOSAL (use when the marketer wants to REACH or MESSAGE customers — launch a
   "assumptions": string[]       // ANY interpretation you had to make. Empty array if none.
 }
 
-QUERY (use when the marketer wants to SEE, LIST, or COUNT customers — not send a campaign. Signals: "show", "list", "who", "how many", "find", "which customers"):
+QUERY (use when the marketer wants to SEE, LIST, COUNT, FIND, or LOOK UP customers — not send a campaign. Signals: "show", "list", "who", "how many", "find", "is there", "does X exist", "give me"):
 {
   "kind": "query",
-  "intent": string,             // short restatement, e.g. "Customers in Mumbai who spent over ₹5000"
-  "rules": Rule
+  "intent": string              // restate what they're asking, e.g. "Is there a customer named Edwin Skiles in Pune"
 }
 
 CLARIFICATION (use when genuinely ambiguous, multiple reasonable readings, or needs data you don't have):
@@ -76,11 +77,11 @@ CLARIFICATION (use when genuinely ambiguous, multiple reasonable readings, or ne
   "options": string[]           // optional: 2-4 suggested interpretations
 }
 
-A Rule is either a Condition or a Group.
+For a PROPOSAL, a Rule is either a Condition or a Group.
 Condition: { "field": Field, "op": Operator, "value": string | number | (string|number)[] }
 Group:     { "combinator": "and" | "or", "rules": Rule[] }
 
-Field is one of (THESE ARE THE ONLY DATA YOU HAVE):
+Field is one of (THESE ARE THE ONLY FIELDS ALLOWED FOR CAMPAIGN RULES):
 - "total_spend"            (number, rupees — sum of the customer's orders)
 - "order_count"            (number of orders placed)
 - "days_since_last_order"  (days since most recent order; high = dormant)
@@ -91,13 +92,13 @@ Operator is one of: "eq", "neq", "gt", "gte", "lt", "lte", "in".
 Use "in" with an array value when matching multiple options.
 
 RULES FOR CHOOSING A SHAPE:
-- If the marketer wants to VIEW, LIST, COUNT, or EXPLORE customers (not launch a campaign), return a QUERY with the matching rules — do NOT invent a message or channel.
-- If they want to REACH or MESSAGE customers, return a PROPOSAL. If it's genuinely ambiguous which of the two they want, prefer QUERY (viewing is safer than proposing a send).
-- If you can proceed but had to choose a threshold or interpret a fuzzy term ("best", "recently"), PROCEED but record every choice in "assumptions" (for a proposal) so the marketer can adjust it.
-- If the request has genuinely different reasonable readings, return a CLARIFICATION with options rather than silently picking one. But once the marketer has answered a clarification, do NOT ask again — proceed.
-- If the request needs data you do NOT have (social media, reviews, support tickets, age), return a CLARIFICATION explaining you can only segment on purchase behaviour, spend, recency, city, and signup source — and suggest a related angle you CAN do.
+- QUERY vs PROPOSAL: if the marketer wants to VIEW, LIST, COUNT, FIND, or LOOK UP customers, return a QUERY. If they want to REACH or MESSAGE customers, return a PROPOSAL. If genuinely ambiguous which, prefer QUERY (viewing is safer than sending).
+- A QUERY can look up ANYTHING about customers — including name, email, phone, city, spend, orders, recency, or signup source. Unlike campaign rules (limited to the 5 fields above), a query has no field limits. So "is there a customer named X", "list customers from Pune", "how many customers total" are all valid QUERIES. For a QUERY you only return "intent" — do NOT build rules.
+- For a PROPOSAL, you may only use the 5 fields above. If a campaign needs data outside those fields, return a CLARIFICATION.
+- If you can proceed with a proposal but had to choose a threshold or interpret a fuzzy term ("best", "recently"), PROCEED but record every choice in "assumptions".
+- If the request has genuinely different reasonable readings, return a CLARIFICATION with options. But once the marketer has answered a clarification, do NOT ask again — proceed.
 
-Mapping guidance:
+Mapping guidance (for proposals):
 - "dormant" / "haven't ordered recently" → days_since_last_order gt (e.g. 60).
 - "high spenders" / "VIP" → total_spend gt (e.g. 5000).
 - "loyal" / "frequent" → order_count gte (e.g. 5).
@@ -110,6 +111,16 @@ function extractJson(text: string): string {
     .replace(/```json\s*/gi, "")
     .replace(/```/g, "")
     .trim();
+}
+
+function isOverloaded(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("503") ||
+    msg.includes("overloaded") ||
+    msg.includes("high demand") ||
+    msg.includes("Service Unavailable")
+  );
 }
 
 function buildContents(messages: ChatMessage[], correction?: string) {
@@ -146,14 +157,26 @@ async function callGemini(
   messages: ChatMessage[],
   correction?: string,
 ): Promise<string> {
-  const result = await model.generateContent({
-    contents: buildContents(messages, correction),
-    generationConfig: {
-      temperature: 0.7,
-      responseMimeType: "application/json",
-    },
-  });
-  return result.response.text();
+  // Retry transient 503 / overload errors with short backoff.
+  for (let i = 0; i <= 2; i++) {
+    try {
+      const result = await model.generateContent({
+        contents: buildContents(messages, correction),
+        generationConfig: {
+          temperature: 0.7,
+          responseMimeType: "application/json",
+        },
+      });
+      return result.response.text();
+    } catch (err) {
+      if (isOverloaded(err) && i < 2) {
+        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Gemini unavailable");
 }
 
 export async function generateProposal(
@@ -172,7 +195,6 @@ export async function generateProposal(
     try {
       const parsed = JSON.parse(extractJson(raw));
       const validated = responseSchema.parse(parsed);
-
       return validated as AiResponse;
     } catch (err) {
       lastError = err;

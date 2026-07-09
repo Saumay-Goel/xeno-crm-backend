@@ -39,17 +39,14 @@ export async function propose(req: Request, res: Response) {
   }
 
   if (result.kind === "query") {
-    // AI-SQL path: use the natural-language question, not the rule tree.
-    const lastUserMessage = [...messages]
-      .reverse()
-      .find((m) => m.role === "user");
     try {
-      const nl = await runNlQuery(lastUserMessage?.content ?? result.intent);
+      const nl = await runNlQuery(messages);
       return res.json({
         kind: "query",
         intent: result.intent,
         rows: nl.rows,
         rowCount: nl.rowCount,
+        sql: nl.sql,
       });
     } catch (err) {
       return res.json({
@@ -63,7 +60,6 @@ export async function propose(req: Request, res: Response) {
     }
   }
 
-  // proposal
   const audience = await previewSegment(result.rules);
   res.json({ kind: "proposal", proposal: result, audience });
 }
