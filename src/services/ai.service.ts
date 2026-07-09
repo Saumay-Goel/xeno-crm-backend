@@ -23,12 +23,11 @@ const clarificationSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
-// NOTE: query no longer carries rules — the AI-SQL layer builds the actual
-// query from natural language, so queries can search ANY field (name, email, …),
-// not just the 5 segment fields.
+// Query now carries the SQL directly — one AI call does classify + generate.
 const querySchema = z.object({
   kind: z.literal("query"),
   intent: z.string().min(1),
+  sql: z.string().min(1),
 });
 
 const responseSchema = z.discriminatedUnion("kind", [
@@ -47,13 +46,11 @@ export interface ChatMessage {
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are a marketing campaign assistant for a CRM. The marketer describes who they want to reach and what to say, in plain English, possibly across several turns of conversation. You translate that into a structured campaign proposal — OR, if they just want to explore or look up customers, you return a query — OR, if the request is ambiguous or relies on data you don't have, you ask a clarifying question instead of guessing.
+const SYSTEM_PROMPT = `You are the assistant inside a marketing CRM. Across a conversation, the marketer either (a) builds campaigns, or (b) asks questions about the customer data. You respond with ONE JSON object per turn.
 
-This is a CONVERSATION. Use the full history: if you previously asked a clarifying question and the marketer just answered it, combine their answer with the earlier intent. If they ask to adjust an earlier proposal (change the discount, the channel, the audience), produce an updated proposal reflecting the change.
+You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary), in ONE of these three shapes:
 
-You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary). It must be ONE of these three shapes:
-
-PROPOSAL (use when the marketer wants to REACH or MESSAGE customers — launch a campaign):
+PROPOSAL — the marketer wants to REACH/MESSAGE customers (launch a campaign):
 {
   "kind": "proposal",
   "segmentName": string,
@@ -61,50 +58,56 @@ PROPOSAL (use when the marketer wants to REACH or MESSAGE customers — launch a
   "message": string,            // use {{name}} and {{city}} tokens where natural
   "channel": "whatsapp" | "sms" | "email" | "rcs",
   "reasoning": string,
-  "assumptions": string[]       // ANY interpretation you had to make. Empty array if none.
+  "assumptions": string[]
 }
 
-QUERY (use when the marketer wants to SEE, LIST, COUNT, FIND, or LOOK UP customers — not send a campaign. Signals: "show", "list", "who", "how many", "find", "is there", "does X exist", "give me"):
+QUERY — the marketer wants to SEE, LIST, COUNT, FIND, or ASK ABOUT customer data (including follow-ups about previously shown results):
 {
   "kind": "query",
-  "intent": string              // restate what they're asking, e.g. "Is there a customer named Edwin Skiles in Pune"
+  "intent": string,             // short restatement, e.g. "Check if a customer named Jazmin is in the Mumbai list"
+  "sql": string                 // ONE PostgreSQL SELECT that answers it (schema below)
 }
 
-CLARIFICATION (use when genuinely ambiguous, multiple reasonable readings, or needs data you don't have):
+CLARIFICATION — genuinely ambiguous, or impossible with the available data:
 {
   "kind": "clarification",
   "question": string,
-  "options": string[]           // optional: 2-4 suggested interpretations
+  "options": string[]
 }
 
-For a PROPOSAL, a Rule is either a Condition or a Group.
-Condition: { "field": Field, "op": Operator, "value": string | number | (string|number)[] }
-Group:     { "combinator": "and" | "or", "rules": Rule[] }
+============ DATABASE SCHEMA (for QUERY sql) ============
+All identifiers are lowercase snake_case. NEVER use double quotes around identifiers.
 
-Field is one of (THESE ARE THE ONLY FIELDS ALLOWED FOR CAMPAIGN RULES):
-- "total_spend"            (number, rupees — sum of the customer's orders)
-- "order_count"            (number of orders placed)
-- "days_since_last_order"  (days since most recent order; high = dormant)
-- "city"                   (string; valid: Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad)
-- "signup_source"          (string; one of: organic, ads, referral)
+Table customers:
+  id, name, email, phone (nullable), city (nullable: Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad),
+  attributes jsonb (may contain {"signupSource": "organic"|"ads"|"referral"}), created_at timestamp
 
-Operator is one of: "eq", "neq", "gt", "gte", "lt", "lte", "in".
-Use "in" with an array value when matching multiple options.
+Table orders:
+  id, customer_id (FK -> customers.id), amount numeric, ordered_at timestamp
 
-RULES FOR CHOOSING A SHAPE:
-- QUERY vs PROPOSAL: if the marketer wants to VIEW, LIST, COUNT, FIND, or LOOK UP customers, return a QUERY. If they want to REACH or MESSAGE customers, return a PROPOSAL. If genuinely ambiguous which, prefer QUERY (viewing is safer than sending).
-- A QUERY can look up ANYTHING about customers — including name, email, phone, city, spend, orders, recency, or signup source. Unlike campaign rules (limited to the 5 fields above), a query has no field limits. So "is there a customer named X", "list customers from Pune", "how many customers total" are all valid QUERIES. For a QUERY you only return "intent" — do NOT build rules.
-- For a PROPOSAL, you may only use the 5 fields above. If a campaign needs data outside those fields, return a CLARIFICATION.
-- If you can proceed with a proposal but had to choose a threshold or interpret a fuzzy term ("best", "recently"), PROCEED but record every choice in "assumptions".
-- If the request has genuinely different reasonable readings, return a CLARIFICATION with options. But once the marketer has answered a clarification, do NOT ask again — proceed.
+JOIN EXAMPLE (follow this exact style):
+  SELECT c.id, c.name, c.email, c.city, SUM(o.amount) AS total_spend
+  FROM customers c
+  JOIN orders o ON o.customer_id = c.id
+  WHERE c.city ILIKE 'Mumbai'
+  GROUP BY c.id, c.name, c.email, c.city
+  HAVING SUM(o.amount) > 5000
 
-Mapping guidance (for proposals):
-- "dormant" / "haven't ordered recently" → days_since_last_order gt (e.g. 60).
-- "high spenders" / "VIP" → total_spend gt (e.g. 5000).
-- "loyal" / "frequent" → order_count gte (e.g. 5).
-- "new" / "first-timers" → order_count lte 1.
-- Channel: WhatsApp for rich re-engagement, SMS for urgent/short, email for detailed offers.
-- Keep messages natural, on-brand, with a clear CTA and a personalization token.`;
+Derived metrics: total spend = SUM(o.amount); order count = COUNT(o.id); days since last order = EXTRACT(DAY FROM now() - MAX(o.ordered_at)).
+Signup source: attributes->>'signupSource'. Use ILIKE for text matching. Max 100 rows.
+
+============ CONVERSATION RULES ============
+- You NEVER see the actual rows of previous results — only the conversation. When the marketer refers to "your list", "these", "those", "the table", they mean the customers matched by the MOST RECENT query. Answer by writing a NEW sql that RE-APPLIES those same filters plus the new condition. Example: after "customers in Mumbai over 5000", the question "is there a name called Jazmin in your list" becomes sql filtering city ILIKE 'Mumbai', HAVING SUM > 5000, AND name ILIKE '%jazmin%'.
+- Questions ABOUT data — "is there…", "how many…", "which of these…", "who is the top…", "does the list have…" — are ALWAYS a QUERY, never a conversational answer.
+- For "total"/"sum"/"average"/"count" follow-ups, return the aggregate, not the full list.
+- QUERY sql can use ANY column (name, email, phone, …). PROPOSAL rules may ONLY use: total_spend, order_count, days_since_last_order, city, signup_source. If a campaign needs other data, return a CLARIFICATION.
+- If a proposal needed threshold choices ("best", "recently"), proceed and record them in "assumptions". If genuinely ambiguous between readings, CLARIFICATION with options — but never re-ask after they've answered.
+
+Mapping guidance (proposals): "dormant" → days_since_last_order gt 60; "high spenders"/"VIP" → total_spend gt 5000; "loyal" → order_count gte 5; "new" → order_count lte 1. WhatsApp for rich re-engagement, SMS for urgent/short, email for detailed offers. Messages: natural, clear CTA, a personalization token.
+
+A Rule is either:
+Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in", "value": string | number | array }
+Group: { "combinator": "and" | "or", "rules": Rule[] }`;
 
 function extractJson(text: string): string {
   return text
@@ -157,13 +160,12 @@ async function callGemini(
   messages: ChatMessage[],
   correction?: string,
 ): Promise<string> {
-  // Retry transient 503 / overload errors with short backoff.
   for (let i = 0; i <= 2; i++) {
     try {
       const result = await model.generateContent({
         contents: buildContents(messages, correction),
         generationConfig: {
-          temperature: 0.7,
+          temperature: 0.3,
           responseMimeType: "application/json",
         },
       });
@@ -179,17 +181,19 @@ async function callGemini(
   throw new Error("Gemini unavailable");
 }
 
-export async function generateProposal(
+export async function generateResponse(
   messages: ChatMessage[],
+  correction?: string,
 ): Promise<AiResponse> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const raw = await callGemini(
       messages,
-      attempt === 2
-        ? "(Your previous response was invalid JSON or didn't match any allowed shape. Respond with ONLY the valid JSON object.)"
-        : undefined,
+      correction ??
+        (attempt === 2
+          ? "(Your previous response was invalid JSON or didn't match any allowed shape. Respond with ONLY the valid JSON object.)"
+          : undefined),
     );
 
     try {
@@ -202,6 +206,7 @@ export async function generateProposal(
         `[ai] attempt ${attempt} failed validation:`,
         (err as Error).message,
       );
+      console.warn(`[ai] raw response was:`, raw.slice(0, 500));
     }
   }
 
@@ -209,3 +214,6 @@ export async function generateProposal(
     `AI could not produce a valid response. ${lastError instanceof Error ? lastError.message : ""}`,
   );
 }
+
+// Back-compat alias if other code imports the old name.
+export const generateProposal = generateResponse;
