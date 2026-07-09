@@ -108,10 +108,7 @@ Mapping guidance (proposals): "dormant" → days_since_last_order gt 60; "high s
 A Rule is either:
 Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in", "value": string | number | array }
 Group: { "combinator": "and" | "or", "rules": Rule[] }
-
-Field is one of:
-- "total_spend", "order_count", "days_since_last_order", "city", "signup_source"
-- "name", "email"  (use op "contains" for partial, case-insensitive matching — e.g. target a specific customer: { "field": "name", "op": "contains", "value": "jazmin" })`;
+`;
 
 function extractJson(text: string): string {
   return text
