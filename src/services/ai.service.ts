@@ -5,7 +5,12 @@ import { z } from "zod";
 import type { Rule } from "../types/segment.types.js";
 
 const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+const chatSchema = z.object({
+  kind: z.literal("chat"),
+  message: z.string().min(1),
+});
 
 const proposalSchema = z.object({
   kind: z.literal("proposal"),
@@ -33,12 +38,18 @@ const responseSchema = z.discriminatedUnion("kind", [
   proposalSchema,
   clarificationSchema,
   querySchema,
+  chatSchema,
 ]);
 
 export type CustomerQuery = z.infer<typeof querySchema>;
 export type CampaignProposal = z.infer<typeof proposalSchema> & { rules: Rule };
 export type Clarification = z.infer<typeof clarificationSchema>;
-export type AiResponse = CampaignProposal | Clarification | CustomerQuery;
+export type ChatReply = z.infer<typeof chatSchema>;
+export type AiResponse =
+  | CampaignProposal
+  | Clarification
+  | CustomerQuery
+  | ChatReply;
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -47,7 +58,10 @@ export interface ChatMessage {
 
 const SYSTEM_PROMPT = `You are the assistant inside a marketing CRM. Across a conversation, the marketer either (a) builds campaigns, or (b) asks questions about the customer data. You respond with ONE JSON object per turn.
 
-You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary), in ONE of these three shapes:
+You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary), in ONE of these four shapes:
+
+CRITICAL ROUTING RULE (check this FIRST):
+- If the message is a greeting, thanks, or small talk ("hi", "hello", "hey", "yo", "what can you do", "help", "thanks", "who are you"), you MUST return { "kind": "chat", "message": "..." } with a short friendly reply. NEVER build a proposal or query for a greeting.
 
 PROPOSAL — the marketer wants to REACH/MESSAGE customers (launch a campaign):
 {
@@ -114,7 +128,14 @@ Field is one of:
 
 TARGETING A SPECIFIC PERSON:
 - When the marketer says "campaign for <name>", "make this for <name>", "reach out to <name>", or names a single customer from a previous result, the audience is THAT PERSON ONLY. Build rules: { "field": "name", "op": "contains", "value": "<name>" }. Do NOT wrap them in a broader segment (no VIP, no total_spend filter) unless the marketer explicitly asks for a group.
-- Build a multi-person segment ONLY when the marketer describes a GROUP ("high spenders", "dormant customers", "people in Mumbai").`;
+- Build a multi-person segment ONLY when the marketer describes a GROUP ("high spenders", "dormant customers", "people in Mumbai").
+
+CHAT — for greetings, thanks, or small talk ("hi", "hello", "what can you do", "thanks"):
+{
+  "kind": "chat",
+  "message": string   // a short, friendly reply. Briefly mention you can find customers or build campaigns.
+}
+`;
 
 function extractJson(text: string): string {
   return text

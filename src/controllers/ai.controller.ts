@@ -20,12 +20,15 @@ const proposeSchema = z.object({
 });
 
 export async function propose(req: Request, res: Response) {
+  console.log("[propose] received:", req.body?.messages?.at(-1)?.content);
   const { messages } = proposeSchema.parse(req.body);
 
   let result;
   try {
     result = await generateResponse(messages);
+    console.log("[propose] AI returned:", JSON.stringify(result));
   } catch (err) {
+    console.error("[ai] generateResponse threw:", err);
     const msg = err instanceof Error ? err.message : "";
     const overloaded =
       msg.includes("503") ||
@@ -40,6 +43,10 @@ export async function propose(req: Request, res: Response) {
     });
   }
 
+  if (result.kind === "chat") {
+    return res.json({ kind: "chat", message: result.message });
+  }
+
   if (result.kind === "clarification") {
     return res.json({
       kind: "clarification",
@@ -49,7 +56,6 @@ export async function propose(req: Request, res: Response) {
   }
 
   if (result.kind === "query") {
-    // Execute the AI's SQL with guards; on SQL error, feed it back once for self-correction.
     let sql = result.sql;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -74,7 +80,6 @@ export async function propose(req: Request, res: Response) {
             options: [],
           });
         }
-        // Ask the AI to fix its SQL, giving it the DB error.
         try {
           const retry = await generateResponse(
             messages,
@@ -82,20 +87,20 @@ export async function propose(req: Request, res: Response) {
           );
           if (retry.kind === "query") {
             sql = retry.sql;
+          } else if (retry.kind === "chat") {
+            return res.json({ kind: "chat", message: retry.message });
+          } else if (retry.kind === "clarification") {
+            return res.json({
+              kind: "clarification",
+              question: retry.question,
+              options: retry.options ?? [],
+            });
           } else {
-            return res.json(
-              retry.kind === "clarification"
-                ? {
-                    kind: "clarification",
-                    question: retry.question,
-                    options: retry.options ?? [],
-                  }
-                : {
-                    kind: "clarification",
-                    question: "I couldn't run that query.",
-                    options: [],
-                  },
-            );
+            return res.json({
+              kind: "clarification",
+              question: "I couldn't run that query.",
+              options: [],
+            });
           }
         } catch {
           return res.json({
@@ -109,7 +114,16 @@ export async function propose(req: Request, res: Response) {
     return;
   }
 
-  // proposal
-  const audience = await previewSegment(result.rules);
-  res.json({ kind: "proposal", proposal: result, audience });
+  if (result.kind === "proposal") {
+    const audience = await previewSegment(result.rules);
+    return res.json({ kind: "proposal", proposal: result, audience });
+  }
+
+  console.warn("[propose] unhandled result:", JSON.stringify(result));
+  return res.json({
+    kind: "clarification",
+    question:
+      "I'm not sure how to help with that. Try asking to see customers or to build a campaign.",
+    options: [],
+  });
 }
