@@ -172,7 +172,7 @@ async function callGemini(
       const result = await model.generateContent({
         contents: buildContents(messages, correction),
         generationConfig: {
-          temperature: 0.3,
+          temperature: 0,
           responseMimeType: "application/json",
         },
       });
