@@ -61,6 +61,8 @@ function getFieldValue(
       return m.name;
     case "email":
       return m.email;
+    default:
+      return null;
   }
 }
 
@@ -90,6 +92,8 @@ function evalCondition(m: CustomerMetrics, cond: Condition): boolean {
         typeof value === "string" &&
         actual.toLowerCase().includes(value.toLowerCase())
       );
+    default:
+      return false;
   }
 }
 
@@ -97,8 +101,8 @@ function evalRule(m: CustomerMetrics, rule: Rule): boolean {
   if (isGroup(rule)) {
     const group = rule as Group;
     return group.combinator === "and"
-      ? group.rules.every((r) => evalRule(m, r))
-      : group.rules.some((r) => evalRule(m, r));
+      ? group.rules.every((r: Rule) => evalRule(m, r))
+      : group.rules.some((r: Rule) => evalRule(m, r));
   }
   return evalCondition(m, rule as Condition);
 }

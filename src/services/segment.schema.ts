@@ -6,9 +6,20 @@ const fieldEnum = z.enum([
   "days_since_last_order",
   "city",
   "signup_source",
+  "name",
+  "email",
 ]);
 
-const operatorEnum = z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "in"]);
+const operatorEnum = z.enum([
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "in",
+  "contains",
+]);
 
 const conditionSchema = z.object({
   field: fieldEnum,

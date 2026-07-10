@@ -23,7 +23,6 @@ const clarificationSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
-// Query now carries the SQL directly — one AI call does classify + generate.
 const querySchema = z.object({
   kind: z.literal("query"),
   intent: z.string().min(1),
@@ -101,18 +100,21 @@ Signup source: attributes->>'signupSource'. Use ILIKE for text matching. Max 100
 - Questions ABOUT data — "is there…", "how many…", "which of these…", "who is the top…", "does the list have…" — are ALWAYS a QUERY, never a conversational answer.
 - For "total"/"sum"/"average"/"count" follow-ups, return the aggregate, not the full list.
 - QUERY sql can use ANY column (name, email, phone, …). PROPOSAL rules may ONLY use: total_spend, order_count, days_since_last_order, city, signup_source. If a campaign needs other data, return a CLARIFICATION.
-- If the marketer asks to "personalize", "target", or "make this for" a specific named customer who appeared in a prior QUERY result, this is a PROPOSAL, not a rule change: reuse the most recent query's filters as the segment "rules" (do NOT add a name/email condition — those fields are for QUERY sql only), and reference the customer by name inside "message" using {{name}}. Record the specific-customer framing in "assumptions" (e.g. "Segment still matches all qualifying customers; message copy is tailored toward Jazmin as the example recipient.").
 - If a proposal needed threshold choices ("best", "recently"), proceed and record them in "assumptions". If genuinely ambiguous between readings, CLARIFICATION with options — but never re-ask after they've answered.
 
 Mapping guidance (proposals): "dormant" → days_since_last_order gt 60; "high spenders"/"VIP" → total_spend gt 5000; "loyal" → order_count gte 5; "new" → order_count lte 1. WhatsApp for rich re-engagement, SMS for urgent/short, email for detailed offers. Messages: natural, clear CTA, a personalization token.
 
 A Rule is either:
-Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in", "value": string | number | array }
+Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in"|"contains", "value": string | number | array }
 Group: { "combinator": "and" | "or", "rules": Rule[] }
 
 Field is one of:
-- "total_spend", "order_count", "days_since_last_order", "city", "signup_source"  — valid for BOTH QUERY sql filtering and PROPOSAL rules
-- "name", "email"  — valid for QUERY sql only (matching/finding specific customers via ILIKE). NEVER include these as PROPOSAL rule fields; a PROPOSAL always targets a segment by the fields above, and personalizes the message text instead.`;
+- "total_spend", "order_count", "days_since_last_order", "city", "signup_source", "name", "email"
+- Operators: "eq", "neq", "gt", "gte", "lt", "lte", "in", and "contains" (case-insensitive substring — use for name/email).
+
+TARGETING A SPECIFIC PERSON:
+- When the marketer says "campaign for <name>", "make this for <name>", "reach out to <name>", or names a single customer from a previous result, the audience is THAT PERSON ONLY. Build rules: { "field": "name", "op": "contains", "value": "<name>" }. Do NOT wrap them in a broader segment (no VIP, no total_spend filter) unless the marketer explicitly asks for a group.
+- Build a multi-person segment ONLY when the marketer describes a GROUP ("high spenders", "dormant customers", "people in Mumbai").`;
 
 function extractJson(text: string): string {
   return text
