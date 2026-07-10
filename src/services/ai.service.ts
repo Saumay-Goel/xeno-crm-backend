@@ -194,7 +194,7 @@ export async function generateResponse(
 ): Promise<AiResponse> {
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     const raw = await callGemini(
       messages,
       correction ??
