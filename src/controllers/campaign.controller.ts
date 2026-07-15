@@ -1,52 +1,28 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as campaignService from "../services/campaign.service.js";
-import * as segmentService from "../services/segment.service.js";
-import { ruleSchema } from "../services/segment.schema.js";
-import type { Rule } from "../types/segment.types.js";
-
-const channelEnum = z.enum(["whatsapp", "sms", "email", "rcs"]);
-
-const launchSchema = z
-  .object({
-    name: z.string().min(1),
-    channel: channelEnum,
-    messageTemplate: z.string().min(1),
-    segmentId: z.string().uuid().optional(),
-    inlineSegment: z
-      .object({ name: z.string().min(1), rules: ruleSchema })
-      .optional(),
-  })
-  .refine((d) => d.segmentId || d.inlineSegment, {
-    message: "Provide either segmentId or inlineSegment",
-  });
-
-const idParam = z.object({ id: z.string().uuid() });
+import { launchDatasetCampaign } from "../services/dataset-campaign.service.js";
 
 function getUserId(req: Request): string {
   return (req as Request & { userId: string }).userId;
 }
 
-export async function launch(req: Request, res: Response) {
-  const userId = getUserId(req);
-  const body = launchSchema.parse(req.body);
+const launchDatasetSchema = z.object({
+  datasetId: z.string().uuid(),
+  name: z.string().min(1),
+  channel: z.enum(["whatsapp", "sms", "email", "rcs"]),
+  contactColumn: z.string().min(1),
+  messageTemplate: z.string().min(1),
+  audienceSql: z.string().min(1),
+});
 
-  let segmentId = body.segmentId;
-  if (!segmentId && body.inlineSegment) {
-    const seg = await segmentService.createSegment(
-      userId,
-      body.inlineSegment.name,
-      body.inlineSegment.rules as Rule,
-    );
-    segmentId = seg.id;
-  }
+const idParam = z.object({ id: z.string().uuid() });
 
-  const result = await campaignService.launchCampaign({
-    userId,
-    name: body.name,
-    segmentId: segmentId!,
-    channel: body.channel,
-    messageTemplate: body.messageTemplate,
+export async function launchDataset(req: Request, res: Response) {
+  const body = launchDatasetSchema.parse(req.body);
+  const result = await launchDatasetCampaign({
+    userId: getUserId(req),
+    ...body,
   });
   res.status(201).json(result);
 }

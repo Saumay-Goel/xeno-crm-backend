@@ -3,16 +3,16 @@ import express from "express";
 import cors from "cors";
 import { Router } from "express";
 import { env } from "./config/env.js";
-import customerRoutes from "./routes/customer.routes.js";
-import orderRoutes from "./routes/order.routes.js";
+
 import { errorMiddleware } from "./middleware/error.middleware.js";
-import segmentRoutes from "./routes/segment.routes.js";
 import receiptRoutes from "./routes/receipt.routes.js";
 import campaignRoutes from "./routes/campaign.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
 import insightsRoutes from "./routes/insights.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import { requireAuth } from "./middleware/auth.middleware.js";
+import datasetRoutes from "./routes/dataset.routes.js";
+
 import "./queue/send.worker.js";
 
 const app = express();
@@ -35,12 +35,10 @@ app.get("/", (_req, res) => {
 
 router.use("/auth", authRoutes);
 router.use("/receipts", receiptRoutes);
-router.use("/customers", requireAuth, customerRoutes);
-router.use("/orders", requireAuth, orderRoutes);
-router.use("/segments", requireAuth, segmentRoutes);
 router.use("/campaigns", requireAuth, campaignRoutes);
 router.use("/insights", requireAuth, insightsRoutes);
 router.use("/ai", requireAuth, aiRoutes);
+router.use("/datasets", requireAuth, datasetRoutes);
 app.use("/api", router);
 
 app.use(errorMiddleware);

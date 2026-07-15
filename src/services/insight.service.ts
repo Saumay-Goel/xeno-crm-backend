@@ -3,7 +3,7 @@ import { prisma } from "../config/db.js";
 export async function getCampaignFunnel(campaignId: string, userId: string) {
   const campaign = await prisma.campaign.findFirst({
     where: { id: campaignId, userId },
-    include: { segment: { select: { name: true } } },
+    include: { dataset: { select: { name: true } } },
   });
   if (!campaign) return null;
 
@@ -41,7 +41,7 @@ export async function getCampaignFunnel(campaignId: string, userId: string) {
       name: campaign.name,
       channel: campaign.channel,
       status: campaign.status,
-      segmentName: campaign.segment.name,
+      datasetName: campaign.dataset?.name ?? "—",
       createdAt: campaign.createdAt,
     },
     funnel,
@@ -50,10 +50,13 @@ export async function getCampaignFunnel(campaignId: string, userId: string) {
 }
 
 export async function getDashboardStats(userId: string) {
-  const [customerCount, orderAgg, campaignCount, commStats, recentCampaigns] =
+  const [datasetCount, rowAgg, campaignCount, commStats, recentCampaigns] =
     await Promise.all([
-      prisma.customer.count(),
-      prisma.order.aggregate({ _sum: { amount: true } }),
+      prisma.dataset.count({ where: { userId } }),
+      prisma.dataset.aggregate({
+        where: { userId },
+        _sum: { rowCount: true },
+      }),
       prisma.campaign.count({ where: { userId } }),
       prisma.communication.findMany({
         where: { campaign: { userId } },
@@ -69,7 +72,7 @@ export async function getDashboardStats(userId: string) {
         take: 5,
         orderBy: { createdAt: "desc" },
         include: {
-          segment: { select: { name: true } },
+          dataset: { select: { name: true } },
           _count: { select: { communications: true } },
         },
       }),
@@ -81,8 +84,8 @@ export async function getDashboardStats(userId: string) {
   const converted = commStats.filter((c) => c.convertedAt).length;
 
   return {
-    customers: customerCount,
-    totalRevenue: Number(orderAgg._sum.amount ?? 0),
+    datasets: datasetCount,
+    totalRows: Number(rowAgg._sum.rowCount ?? 0),
     campaigns: campaignCount,
     messaging: {
       sent,
@@ -96,7 +99,7 @@ export async function getDashboardStats(userId: string) {
       id: c.id,
       name: c.name,
       channel: c.channel,
-      segmentName: c.segment.name,
+      datasetName: c.dataset?.name ?? "—",
       audience: c._count.communications,
       createdAt: c.createdAt,
     })),

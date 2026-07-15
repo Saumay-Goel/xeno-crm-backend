@@ -1,8 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../config/env.js";
-import { ruleSchema } from "./segment.schema.js";
 import { z } from "zod";
-import type { Rule } from "../types/segment.types.js";
 
 const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -10,16 +8,6 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 const chatSchema = z.object({
   kind: z.literal("chat"),
   message: z.string().min(1),
-});
-
-const proposalSchema = z.object({
-  kind: z.literal("proposal"),
-  segmentName: z.string().min(1),
-  rules: ruleSchema,
-  message: z.string().min(1),
-  channel: z.enum(["whatsapp", "sms", "email", "rcs"]),
-  reasoning: z.string(),
-  assumptions: z.array(z.string()).default([]),
 });
 
 const clarificationSchema = z.object({
@@ -31,111 +19,67 @@ const clarificationSchema = z.object({
 const querySchema = z.object({
   kind: z.literal("query"),
   intent: z.string().min(1),
-  sql: z.string().min(1),
+  sql: z.string().min(1).optional(),
+});
+
+const datasetCampaignSchema = z.object({
+  kind: z.literal("dataset_campaign"),
+  intent: z.string().min(1),
 });
 
 const responseSchema = z.discriminatedUnion("kind", [
-  proposalSchema,
   clarificationSchema,
   querySchema,
   chatSchema,
+  datasetCampaignSchema,
 ]);
 
 export type CustomerQuery = z.infer<typeof querySchema>;
-export type CampaignProposal = z.infer<typeof proposalSchema> & { rules: Rule };
 export type Clarification = z.infer<typeof clarificationSchema>;
 export type ChatReply = z.infer<typeof chatSchema>;
+export type DatasetCampaign = z.infer<typeof datasetCampaignSchema>;
+
 export type AiResponse =
-  | CampaignProposal
   | Clarification
   | CustomerQuery
-  | ChatReply;
+  | ChatReply
+  | DatasetCampaign;
 
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-const SYSTEM_PROMPT = `You are the assistant inside a marketing CRM. Across a conversation, the marketer either (a) builds campaigns, or (b) asks questions about the customer data. You respond with ONE JSON object per turn.
-
-You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no commentary), in ONE of these four shapes:
+const SYSTEM_PROMPT = `You are the assistant inside an AI-native CRM. The user uploads their own dataset (any columns), and you help them EXPLORE it or build CAMPAIGNS over it. You respond with ONLY ONE JSON object per turn (no markdown, no backticks, no commentary), in ONE of these shapes:
 
 CRITICAL ROUTING RULE (check this FIRST):
-- If the message is a greeting, thanks, or small talk ("hi", "hello", "hey", "yo", "what can you do", "help", "thanks", "who are you"), you MUST return { "kind": "chat", "message": "..." } with a short friendly reply. NEVER build a proposal or query for a greeting.
+- If the message is a greeting, thanks, or small talk ("hi", "hello", "hey", "what can you do", "help", "thanks", "who are you"), return { "kind": "chat", "message": "..." } — a short friendly reply mentioning you can explore their data or build a campaign. NEVER build a query or campaign for a greeting.
 
-PROPOSAL — the marketer wants to REACH/MESSAGE customers (launch a campaign):
-{
-  "kind": "proposal",
-  "segmentName": string,
-  "rules": Rule,
-  "message": string,            // use {{name}} and {{city}} tokens where natural
-  "channel": "whatsapp" | "sms" | "email" | "rcs",
-  "reasoning": string,
-  "assumptions": string[]
-}
-
-QUERY — the marketer wants to SEE, LIST, COUNT, FIND, or ASK ABOUT customer data (including follow-ups about previously shown results):
+QUERY — the user wants to SEE, LIST, COUNT, FIND, or ASK ABOUT their data (including follow-ups about previously shown results):
 {
   "kind": "query",
-  "intent": string,             // short restatement, e.g. "Check if a customer named Jazmin is in the Mumbai list"
-  "sql": string                 // ONE PostgreSQL SELECT that answers it (schema below)
+  "intent": string      // short restatement, e.g. "Customers in Ecuador"
+}
+(The actual SQL is generated separately against the user's active dataset — you only classify the intent.)
+
+DATASET_CAMPAIGN — the user wants to SEND / MESSAGE / run a CAMPAIGN to rows of their data:
+{
+  "kind": "dataset_campaign",
+  "intent": string      // restate the campaign request, e.g. "Send a 20% discount to customers in Ecuador"
 }
 
-CLARIFICATION — genuinely ambiguous, or impossible with the available data:
+CLARIFICATION — genuinely ambiguous or impossible:
 {
   "kind": "clarification",
   "question": string,
   "options": string[]
 }
 
-============ DATABASE SCHEMA (for QUERY sql) ============
-All identifiers are lowercase snake_case. NEVER use double quotes around identifiers.
-
-Table customers:
-  id, name, email, phone (nullable), city (nullable: Mumbai, Delhi, Bangalore, Chennai, Hyderabad, Pune, Kolkata, Ahmedabad),
-  attributes jsonb (may contain {"signupSource": "organic"|"ads"|"referral"}), created_at timestamp
-
-Table orders:
-  id, customer_id (FK -> customers.id), amount numeric, ordered_at timestamp
-
-JOIN EXAMPLE (follow this exact style):
-  SELECT c.id, c.name, c.email, c.city, SUM(o.amount) AS total_spend
-  FROM customers c
-  JOIN orders o ON o.customer_id = c.id
-  WHERE c.city ILIKE 'Mumbai'
-  GROUP BY c.id, c.name, c.email, c.city
-  HAVING SUM(o.amount) > 5000
-
-Derived metrics: total spend = SUM(o.amount); order count = COUNT(o.id); days since last order = EXTRACT(DAY FROM now() - MAX(o.ordered_at)).
-Signup source: attributes->>'signupSource'. Use ILIKE for text matching. Max 100 rows.
-
-============ CONVERSATION RULES ============
-- You NEVER see the actual rows of previous results — only the conversation. When the marketer refers to "your list", "these", "those", "the table", they mean the customers matched by the MOST RECENT query. Answer by writing a NEW sql that RE-APPLIES those same filters plus the new condition. Example: after "customers in Mumbai over 5000", the question "is there a name called Jazmin in your list" becomes sql filtering city ILIKE 'Mumbai', HAVING SUM > 5000, AND name ILIKE '%jazmin%'.
-- Questions ABOUT data — "is there…", "how many…", "which of these…", "who is the top…", "does the list have…" — are ALWAYS a QUERY, never a conversational answer.
-- For "total"/"sum"/"average"/"count" follow-ups, return the aggregate, not the full list.
-- QUERY sql can use ANY column (name, email, phone, …). PROPOSAL rules may ONLY use: total_spend, order_count, days_since_last_order, city, signup_source. If a campaign needs other data, return a CLARIFICATION.
-- If a proposal needed threshold choices ("best", "recently"), proceed and record them in "assumptions". If genuinely ambiguous between readings, CLARIFICATION with options — but never re-ask after they've answered.
-
-Mapping guidance (proposals): "dormant" → days_since_last_order gt 60; "high spenders"/"VIP" → total_spend gt 5000; "loyal" → order_count gte 5; "new" → order_count lte 1. WhatsApp for rich re-engagement, SMS for urgent/short, email for detailed offers. Messages: natural, clear CTA, a personalization token.
-
-A Rule is either:
-Condition: { "field": Field, "op": "eq"|"neq"|"gt"|"gte"|"lt"|"lte"|"in"|"contains", "value": string | number | array }
-Group: { "combinator": "and" | "or", "rules": Rule[] }
-
-Field is one of:
-- "total_spend", "order_count", "days_since_last_order", "city", "signup_source", "name", "email"
-- Operators: "eq", "neq", "gt", "gte", "lt", "lte", "in", and "contains" (case-insensitive substring — use for name/email).
-
-TARGETING A SPECIFIC PERSON:
-- When the marketer says "campaign for <name>", "make this for <name>", "reach out to <name>", or names a single customer from a previous result, the audience is THAT PERSON ONLY. Build rules: { "field": "name", "op": "contains", "value": "<name>" }. Do NOT wrap them in a broader segment (no VIP, no total_spend filter) unless the marketer explicitly asks for a group.
-- Build a multi-person segment ONLY when the marketer describes a GROUP ("high spenders", "dormant customers", "people in Mumbai").
-
-CHAT — for greetings, thanks, or small talk ("hi", "hello", "what can you do", "thanks"):
-{
-  "kind": "chat",
-  "message": string   // a short, friendly reply. Briefly mention you can find customers or build campaigns.
-}
-`;
+RULES:
+- Questions ABOUT data — "show…", "list…", "is there…", "how many…", "which of these…", "who is the top…" — are ALWAYS a QUERY.
+- Requests to SEND / MESSAGE / DISCOUNT / EMAIL / CAMPAIGN to rows are ALWAYS a DATASET_CAMPAIGN.
+- The active dataset's real columns are provided in a follow-up system note. Treat ANY column mentioned there as valid — never claim a column doesn't exist if it's listed.
+- Follow-ups like "these", "those", "the list", "your list" refer to the most recent query's audience.`;
 
 function extractJson(text: string): string {
   return text
@@ -164,7 +108,7 @@ function buildContents(messages: ChatMessage[], correction?: string) {
       role: "model",
       parts: [
         {
-          text: "Understood. I will respond with only the JSON object, in one of the three allowed shapes, using the full conversation context.",
+          text: "Understood. I will respond with only the JSON object, in one of the allowed shapes, using the full conversation context.",
         },
       ],
     },
@@ -242,5 +186,3 @@ export async function generateResponse(
     `AI could not produce a valid response. ${lastError instanceof Error ? lastError.message : ""}`,
   );
 }
-
-export const generateProposal = generateResponse;

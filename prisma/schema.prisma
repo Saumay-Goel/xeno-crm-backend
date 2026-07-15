@@ -36,96 +36,54 @@ enum CampaignStatus {
   completed
 }
 
-// The marketer who logs in (Google OAuth). Owns the segments + campaigns they create.
-// Customers/orders are NOT owned by a user — they're the brand's shared shopper base.
 model User {
-  id           String   @id @default(uuid())
-  googleId     String?  @unique @map("google_id")   // now optional
-  email        String   @unique
-  passwordHash String?  @map("password_hash")        // null for Google users
+  id           String     @id @default(uuid())
+  googleId     String?    @unique @map("google_id")
+  email        String     @unique
+  passwordHash String?    @map("password_hash")
   name         String?
-  avatarUrl    String?  @map("avatar_url")
-  createdAt    DateTime @default(now()) @map("created_at")
+  avatarUrl    String?    @map("avatar_url")
+  createdAt    DateTime   @default(now()) @map("created_at")
 
-  segments  Segment[]
-  campaigns Campaign[]
+  campaigns    Campaign[]
+  datasets     Dataset[]
 
   @@map("users")
 }
 
-model Customer {
-  id         String   @id @default(uuid())
-  name       String
-  email      String   @unique
-  phone      String?
-  city       String?
-  attributes Json     @default("{}")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  orders         Order[]
-  communications Communication[]
-
-  @@index([city])
-  @@map("customers")
-}
-
-model Order {
-  id         String   @id @default(uuid())
-  customerId String   @map("customer_id")
-  amount     Decimal  @db.Decimal(10, 2)
-  items      Json     @default("[]")
-  orderedAt  DateTime @map("ordered_at")
-
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@index([customerId])
-  @@index([orderedAt])
-  @@map("orders")
-}
-
-// rules = structured segment tree (from manual builder OR AI). Engine translates to SQL.
-// Owned by the marketer who created it.
-model Segment {
-  id        String   @id @default(uuid())
-  userId    String   @map("user_id")
-  name      String
-  rules     Json
-  createdAt DateTime @default(now()) @map("created_at")
-
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  campaigns Campaign[]
-
-  @@index([userId])
-  @@map("segments")
-}
-
-// Owned by the marketer who launched it.
+// A campaign launched over an uploaded dataset.
 model Campaign {
   id              String         @id @default(uuid())
   userId          String         @map("user_id")
   name            String
-  segmentId       String         @map("segment_id")
   channel         Channel
   messageTemplate String         @map("message_template")
   status          CampaignStatus @default(draft)
   createdAt       DateTime       @default(now()) @map("created_at")
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  segment        Segment         @relation(fields: [segmentId], references: [id])
-  communications Communication[]
+  datasetId       String?        @map("dataset_id")
+  contactColumn   String?        @map("contact_column")
+  audienceSql     String?        @map("audience_sql")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dataset         Dataset?        @relation(fields: [datasetId], references: [id])
+  communications  Communication[]
 
   @@index([userId])
   @@map("campaigns")
 }
 
-// One row per (campaign x customer). Timestamp-per-stage lets us compute the funnel with COUNTs.
+// One row per (campaign x recipient). Timestamp-per-stage lets us compute the funnel with COUNTs.
 model Communication {
   id              String     @id @default(uuid())
   campaignId      String     @map("campaign_id")
-  customerId      String     @map("customer_id")
   channel         Channel
   renderedMessage String     @map("rendered_message")
   status          CommStatus @default(queued)
+
+  contact         String?                              // snapshot of email/phone sent to
+  datasetRowId    String?    @map("dataset_row_id")   // source row reference
+
   sentAt          DateTime?  @map("sent_at")
   deliveredAt     DateTime?  @map("delivered_at")
   failedAt        DateTime?  @map("failed_at")
@@ -134,9 +92,8 @@ model Communication {
   clickedAt       DateTime?  @map("clicked_at")
   convertedAt     DateTime?  @map("converted_at")
 
-  campaign Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  customer Customer  @relation(fields: [customerId], references: [id])
-  receipts Receipt[]
+  campaign        Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  receipts        Receipt[]
 
   @@index([campaignId])
   @@index([status])
@@ -155,4 +112,48 @@ model Receipt {
 
   @@index([communicationId])
   @@map("receipts")
+}
+
+// A user-uploaded dataset (e.g. a CSV). The tenancy boundary — each belongs to one user.
+model Dataset {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  rowCount  Int             @default(0) @map("row_count")
+  createdAt DateTime        @default(now()) @map("created_at")
+
+  columns   DatasetColumn[]
+  rows      DatasetRow[]
+  campaigns Campaign[]
+
+  @@index([userId])
+  @@map("datasets")
+}
+
+// The inferred schema of a dataset — one row per column. This is what the AI reads to adapt.
+model DatasetColumn {
+  id           String   @id @default(uuid())
+  datasetId    String   @map("dataset_id")
+  dataset      Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  name         String
+  key          String
+  type         String
+  position     Int
+  sampleValues String[] @map("sample_values")
+
+  @@unique([datasetId, key])
+  @@index([datasetId])
+  @@map("dataset_columns")
+}
+
+// One row of a dataset, stored generically as JSON so any schema works.
+model DatasetRow {
+  id        String  @id @default(uuid())
+  datasetId String  @map("dataset_id")
+  dataset   Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  data      Json
+
+  @@index([datasetId])
+  @@map("dataset_rows")
 }
